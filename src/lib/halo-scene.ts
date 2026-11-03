@@ -84,15 +84,26 @@ export function initHaloScene(root: HTMLElement): () => void {
     depthWrite: false,
   });
   const bgGeometry = new THREE.PlaneGeometry(2, 2);
-  const geometry = new THREE.SphereGeometry(4.2, 200, 600);
+  // The original 200 × 600 sphere produced over 120,000 particles. This scene
+  // is shader-heavy (noise, morphing, bloom), so use a density that preserves
+  // the particle-cloud appearance without monopolising the main thread during
+  // keyboard and scroll input.
+  const isSmallScreen = window.matchMedia("(max-width: 768px)").matches;
+  const geometry = new THREE.SphereGeometry(
+    4.2,
+    isSmallScreen ? 104 : 144,
+    isSmallScreen ? 240 : 360,
+  );
   const particles = new THREE.Points(geometry, material);
   particles.frustumCulled = false;
   scene.add(particles);
 
   try {
+    // Keep the original canvas compositing configuration: the fixed WebGL
+    // layer must stay transparent behind the HTML overlays on mobile browsers.
     renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, isSmallScreen ? 1 : 1.5));
     renderer.autoClear = false;
     container.appendChild(renderer.domElement);
 
@@ -133,9 +144,16 @@ export function initHaloScene(root: HTMLElement): () => void {
   const INTRO_MS = 2600;
   let introStart = 0;
   let rafId = 0;
+  let isPageVisible = !document.hidden;
+  let previousScroll = -1;
   const lookTarget = new THREE.Vector3();
 
   function frame(now: number) {
+    if (!isPageVisible) {
+      rafId = 0;
+      return;
+    }
+
     lenis.raf(now);
     time += 0.005;
 
@@ -185,51 +203,57 @@ export function initHaloScene(root: HTMLElement): () => void {
     particles.rotation.x = Math.sin(smoothPan * Math.PI) * 0.15;
     camera.rotation.z = 0.0;
 
-    // Big-bang flash
-    const glowScaleProgress =
-      currentScroll < 0.9 ? 0.0 : Math.min((currentScroll - 0.9) / 0.03, 1.0);
-    const glowScale = Math.pow(glowScaleProgress, 4.0) * 400.0;
-    const hideGlow = currentScroll < 0.93 ? 0.0 : Math.min((currentScroll - 0.93) / 0.02, 1.0);
-    glow!.style.transform = `translate(-50%, -50%) scale(${glowScale})`;
-    glow!.style.opacity = `${1.0 - hideGlow}`;
+    // DOM updates only need to happen when Lenis has actually moved the page.
+    // Avoiding style writes on every rendered frame keeps keyboard input responsive.
+    if (Math.abs(currentScroll - previousScroll) > 0.00001) {
+      previousScroll = currentScroll;
 
-    // Overlay windows
-    setGroup("hero", currentScroll < 0.02 ? "visible" : "after");
-    const waveState: GroupState =
-      currentScroll < 0.48 ? "before" : currentScroll <= 0.62 ? "visible" : "after";
-    setGroup("wave", waveState);
-    if (waveState !== "before") playTitle("wave");
-    const galaxyState: GroupState = currentScroll >= 0.93 ? "visible" : "before";
-    setGroup("galaxy", galaxyState);
-    if (galaxyState === "visible") playTitle("galaxy");
+      // Big-bang flash
+      const glowScaleProgress =
+        currentScroll < 0.9 ? 0.0 : Math.min((currentScroll - 0.9) / 0.03, 1.0);
+      const glowScale = Math.pow(glowScaleProgress, 4.0) * 400.0;
+      const hideGlow = currentScroll < 0.93 ? 0.0 : Math.min((currentScroll - 0.93) / 0.02, 1.0);
+      glow!.style.transform = `translate(-50%, -50%) scale(${glowScale})`;
+      glow!.style.opacity = `${1.0 - hideGlow}`;
 
-    // DNA stat cards
-    let dnaOpacity = 0;
-    const cs = currentScroll;
-    if (cs > 0.15 && cs < 0.38) {
-      dnaOpacity = Math.min((cs - 0.15) / 0.03, 1);
-      if (cs > 0.35) dnaOpacity = Math.max(1 - (cs - 0.35) / 0.03, 0);
-    }
-    dnaContainer!.style.opacity = `${dnaOpacity}`;
+      // Overlay windows
+      setGroup("hero", currentScroll < 0.02 ? "visible" : "after");
+      const waveState: GroupState =
+        currentScroll < 0.48 ? "before" : currentScroll <= 0.62 ? "visible" : "after";
+      setGroup("wave", waveState);
+      if (waveState !== "before") playTitle("wave");
+      const galaxyState: GroupState = currentScroll >= 0.93 ? "visible" : "before";
+      setGroup("galaxy", galaxyState);
+      if (galaxyState === "visible") playTitle("galaxy");
 
-    if (dnaOpacity > 0) {
-      const dnaProgress = (cs - 0.15) / 0.23;
-      const globalYOffset = 600 - dnaProgress * 1200;
-      const baseAngle = dnaProgress * Math.PI * 2;
-      const cx = window.innerWidth / 2;
-      const cy = window.innerHeight / 2;
-      const rx = Math.min(window.innerWidth * 0.35, 400);
-      const ry = 80;
-      dnaCards.forEach((el, i) => {
-        const angle = baseAngle + (ANGLE_OFFSETS[i] ?? 0);
-        const x = cx + Math.cos(angle) * rx;
-        const y = cy + Math.sin(angle) * ry + globalYOffset + (Y_OFFSETS[i] ?? 0);
-        const scale = 0.8 + 0.2 * Math.sin(angle);
-        const opacity = 0.4 + 0.6 * Math.sin(angle);
-        el.style.transform = `translate(-50%, -50%) translate3d(${x}px, ${y}px, 0) scale(${scale}) rotateY(${angle - Math.PI / 2}rad)`;
-        el.style.opacity = `${opacity}`;
-        el.style.zIndex = `${Math.round(scale * 100)}`;
-      });
+      // DNA stat cards
+      let dnaOpacity = 0;
+      const cs = currentScroll;
+      if (cs > 0.15 && cs < 0.38) {
+        dnaOpacity = Math.min((cs - 0.15) / 0.03, 1);
+        if (cs > 0.35) dnaOpacity = Math.max(1 - (cs - 0.35) / 0.03, 0);
+      }
+      dnaContainer!.style.opacity = `${dnaOpacity}`;
+
+      if (dnaOpacity > 0) {
+        const dnaProgress = (cs - 0.15) / 0.23;
+        const globalYOffset = 600 - dnaProgress * 1200;
+        const baseAngle = dnaProgress * Math.PI * 2;
+        const cx = window.innerWidth / 2;
+        const cy = window.innerHeight / 2;
+        const rx = Math.min(window.innerWidth * 0.35, 400);
+        const ry = 80;
+        dnaCards.forEach((el, i) => {
+          const angle = baseAngle + (ANGLE_OFFSETS[i] ?? 0);
+          const x = cx + Math.cos(angle) * rx;
+          const y = cy + Math.sin(angle) * ry + globalYOffset + (Y_OFFSETS[i] ?? 0);
+          const scale = 0.8 + 0.2 * Math.sin(angle);
+          const opacity = 0.4 + 0.6 * Math.sin(angle);
+          el.style.transform = `translate(-50%, -50%) translate3d(${x}px, ${y}px, 0) scale(${scale}) rotateY(${angle - Math.PI / 2}rad)`;
+          el.style.opacity = `${opacity}`;
+          el.style.zIndex = `${Math.round(scale * 100)}`;
+        });
+      }
     }
 
     composer?.render();
@@ -237,10 +261,17 @@ export function initHaloScene(root: HTMLElement): () => void {
   }
   rafId = requestAnimationFrame(frame);
 
+  const handleVisibilityChange = () => {
+    isPageVisible = !document.hidden;
+    if (isPageVisible && rafId === 0) rafId = requestAnimationFrame(frame);
+  };
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+
   return () => {
     cancelAnimationFrame(firstRaf);
     cancelAnimationFrame(rafId);
     window.removeEventListener("resize", handleResize);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
     lenis.destroy();
     geometry.dispose();
     bgGeometry.dispose();
