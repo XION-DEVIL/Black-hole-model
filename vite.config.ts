@@ -4,8 +4,12 @@ import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import { fileURLToPath, URL } from "node:url";
 
-// GitHub Pages build: `GITHUB_PAGES=true PAGES_BASE=/<repo>/ bun run build`.
-const isGithubPages = process.env["GITHUB_PAGES"] === "true";
+// Static hosting build (GitHub Pages / GitLab Pages):
+// e.g. `STATIC_PAGES=true PAGES_BASE=/<path>/ bun run build` or `GITHUB_PAGES=true`
+const isStaticPages =
+  process.env["STATIC_PAGES"] === "true" ||
+  process.env["GITHUB_PAGES"] === "true" ||
+  process.env["CI_PAGES_URL"] !== undefined;
 const pagesBase = normalizeBase(process.env["PAGES_BASE"] ?? "/");
 
 function normalizeBase(base: string) {
@@ -16,7 +20,7 @@ function normalizeBase(base: string) {
 }
 
 export default defineConfig({
-  base: isGithubPages ? pagesBase : "/",
+  base: isStaticPages ? pagesBase : "/",
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
@@ -24,7 +28,7 @@ export default defineConfig({
   },
   plugins: [
     tanstackStart(
-      isGithubPages
+      isStaticPages
         ? {
             server: { entry: "server" },
             router: { basepath: pagesBase },
